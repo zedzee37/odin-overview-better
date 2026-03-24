@@ -1,9 +1,12 @@
 let sections = [];
 let search = undefined;
-let results = [];
+let results = undefined;
+let currentSection = undefined;
 
 async function main() {
 	search = document.getElementById("search");
+	results = document.getElementById("results");
+	currentSection = document.getElementById("currentSection");
 
 	const response = await fetch("https://odin-lang.org/docs/overview/");
 	const html = await response.text();
@@ -16,10 +19,6 @@ async function main() {
 
 	sections = parseArticle(articles[0]);
 	const main = document.getElementsByTagName("main")[0];
-	
-	for (const section of sections) {
-		insertSection(main, section.elements);
-	}
 }
 
 function parseArticle(article) {
@@ -29,7 +28,7 @@ function parseArticle(article) {
 		elements: []
 	};
 	for (child of article.children) {
-		if (child.tagName.toLowerCase() == "h2") {
+		if (child.tagName.toLowerCase()[0] == "h") {
 			if (currentSection.name !== undefined && currentSection.name != "") {
 				sections.push(currentSection);
 			}
@@ -49,66 +48,143 @@ function insertSection(doc, section) {
 	let div = document.createElement("div");
 	for (const element of section) {
 		handleChild(element);
+		handleChildren(element);
 		div.appendChild(element);
 	}
 	doc.appendChild(div);
-	return div;
+}
+
+function handleChildren(element) {
+	for (const child of element.children) {
+		handleChild(child);
+		handleChildren(child);
+	}
+}	
+
+function parseHRef(href) {
+	if (href.startsWith("https://pkg.odin-lang.org")) {
+		return "";
+	}
+
+	const length = href.length;
+	let current = 0;
+	while (current < length && href[current] !== "#") {
+		current += 1;
+	}
+	return href.slice(current + 1);
 }
 
 function handleChild(child) {
-	// TODO: handle anchors and such
+	if (child.tagName.toLowerCase() == "a") {
+		// try to find the most likely section this is pointing tko
+		const href = parseHRef(child.href);
+		child.href = "#";
+		if (sections.length !== 0) {
+			const sorted = sections.sort((a, b) => searchScore(href, b.name) - searchScore(href, a.name));
+			resolveAnchor(child, sorted[0]);
+		}
+	}
+}
+
+function resolveAnchor(anchor, result) {
+	anchor.href = "#";
+	anchor.onmousedown = (event) => onClickSection(result, event);
+}
+
+function findFirstResult() {
+	for (const result of results.children) {
+		if (result !== undefined) {
+			return result;
+		}
+	}
+	return undefined;
 }
 
 function onSearch(event) {
 	displayResults();
+	if (results.children.length === 0) {
+		return;
+	}
+
 	if (event.key == "Enter" || event.keyCode == 13) {
-		// TODO: handle searching here
+		const firstResult = findFirstResult();
+		if (firstResult !== undefined) {
+			findFirstResult().onmousedown(null);
+			if (document.activeElement !== undefined) {
+				document.activeElement.blur();
+			}
+		}
 	}
 }
 
-function getCharMap(s) {
+function getLowerCharMap(s) {
 	let charMap = {}
 	for (let char of s) {
+		const lowerChar = char.toLowerCase();
 		let count = 0;
-		if (char in charMap) {
-			count = charMap[char];
+		if (lowerChar in charMap) {
+			count = charMap[lowerChar];
 		}
 		count += 1;
-		charMap[char] = count;
+		charMap[lowerChar] = count;
 	}
 	return charMap;
 }
 
-function searchScore(s1, s2) {
-	let charMap1 = getCharMap(s1);
-	let charMap2 = getCharMap(s2);
-	let score = 0;
-	for (const char in charMap1) {
-		const count = charMap1[char];
-		if (!(char in charMap2)) {
-			score -= count;
-			continue;
-		}
+function searchScore(query, target) {
+    query = query.toLowerCase();
+    target = target.toLowerCase();
+    
+    if (query === target) return 100;
+    if (target.includes(query)) return 80 + (query.length / target.length * 10);
 
-		let otherCount = charMap2[char];
-		let penalty = Math.abs(count - otherCount);
-		score += count + penalty;
+    let score = 0;
+    let targetIdx = 0;
+    let matches = 0;
+
+    for (let i = 0; i < query.length; i++) {
+        const char = query[i];
+        const foundIdx = target.indexOf(char, targetIdx);
+        
+        if (foundIdx !== -1) {
+            matches++;
+            if (foundIdx === targetIdx) score += 10; 
+            targetIdx = foundIdx + 1;
+        }
+    }
+
+    return (matches / query.length) * score;
+}
+
+function removeAllChildren(element) {
+	while (element.firstChild) {
+		element.removeChild(element.lastChild);
 	}
-
-	return score;
 }
 
 function displayResults() {
-	results = [];
+	if (results === undefined) {
+		return;
+	}
+	removeAllChildren(results);
 	const text = search.value;
-	let sorted = sections.sort((a, b) => searchScore(text, a.name) < searchScore(text, b.name));
-	for (result of sorted) {
+	const sorted = sections.sort((a, b) => searchScore(text, b.name) - searchScore(text, a.name));
+	for (const result of sorted) {
+		const anchor = document.createElement("a");
+		anchor.className = "result";
+		resolveAnchor(anchor, result);
+		anchor.textContent = result.name;
+		results.appendChild(anchor);
 	}
 }
 
 function removeResults() {
-	if (results.length === 0) {
+	if (results === undefined || results.children.length === 0) {
 		return;
+	}
+	
+	if (results !== undefined) {
+		removeAllChildren(results);
 	}
 }
 
@@ -117,7 +193,44 @@ function onSearchFocus(event) {
 }
 
 function onSearchBlur(event) {
-	removeResults();
+	setTimeout(() => {
+		removeResults();
+	}, 150);
+}
+
+function removeCurrentSection() {
+	if (currentSection === undefined) {
+		return;
+	}
+	removeAllChildren(currentSection);
+}
+
+function onClickSection(section, event) {
+	if (currentSection !== undefined) {
+		removeCurrentSection();
+	}
+	insertSection(currentSection, section.elements);
+}
+
+document.onkeyup = (event) => {
+	const ALPHABET = "abcdefghijklmnopqrstuvwxyz";
+
+	if (event.key == "Enter" || event.keyCode === 13) {
+		return;
+	}
+
+	if (document.activeElement == search) {
+		return;
+	}
+
+	if (search !== undefined) {
+		search.focus();
+		search.value = "";
+		
+		if (ALPHABET.includes(event.key.toLowerCase())) {
+			search.value = event.key;
+		}
+	}
 }
 
 main();
